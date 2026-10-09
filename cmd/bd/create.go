@@ -173,6 +173,8 @@ var createCmd = &cobra.Command{
 			if !types.Status(statusFlag).IsValidWithCustom(loadEmbeddedCustomStatuses()) {
 				return HandleErrorRespectJSON("invalid status %q (built-in: open, in_progress, blocked, deferred, closed, pinned, hooked; or configure custom statuses via 'bd config set status.custom')", statusFlag)
 			}
+		} else if statusFlag, err = configuredDefaultCreateStatus(); err != nil {
+			return HandleErrorRespectJSON("%v", err)
 		}
 
 		labels, _ := cmd.Flags().GetStringSlice("labels")
@@ -871,6 +873,24 @@ func selectCreateIDPrefix(global bool, yamlPrefix, storePrefix string) string {
 		return yamlPrefix
 	}
 	return storePrefix
+}
+
+// configuredDefaultCreateStatus returns the status.default config value for a
+// create that carries no --status, or "" when it is unset. Custom statuses
+// from status.custom are valid defaults.
+func configuredDefaultCreateStatus() (string, error) {
+	if store == nil {
+		return "", nil
+	}
+	configured, err := store.GetConfig(rootCtx, "status.default")
+	if err != nil {
+		return "", nil // Best effort: an unreadable default falls back to open
+	}
+	configured = strings.TrimSpace(configured)
+	if configured != "" && !types.Status(configured).IsValidWithCustom(loadEmbeddedCustomStatuses()) {
+		return "", fmt.Errorf("invalid status.default %q (built-in: open, in_progress, blocked, deferred, closed, pinned, hooked; or configure custom statuses via 'bd config set status.custom')", configured)
+	}
+	return configured, nil
 }
 
 func renderCreateDryRunPreview(issue *types.Issue, labels, deps []string) {
