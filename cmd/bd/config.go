@@ -91,6 +91,23 @@ Claim Pools:
   that if a taker's lease expires, bd reclaim returns the issue to the
   unassigned pool, not to the pool alias it was dispatched to.
 
+  Default Initial Status:
+    Set status.default to change the status a single-issue 'bd create' gives
+    new issues when nothing else decides it. Precedence: an explicit --status
+    flag, then a --defer-derived 'deferred', then status.default, then the
+    built-in 'open'. The value must be a built-in status or a configured custom
+    status; it is validated when 'bd create' needs it, so an invalid value never
+    blocks a create that --status or --defer already decides.
+
+    Scope: only single-issue 'bd create' in the workspace you run it from.
+    Batch create (--file / --graph), cross-repo creates (--repo and
+    contributor/maintainer auto-routing), and the sibling commands 'bd q',
+    'bd create-form', 'bd batch create', and 'bd todo add' start issues in
+    'open' and do not consult status.default.
+
+    Example:
+      bd config set status.default backlog
+
 Suppressing Doctor Warnings:
   Suppress specific bd doctor warnings by check name slug:
     bd config set doctor.suppress.pending-migrations true

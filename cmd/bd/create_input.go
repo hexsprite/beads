@@ -18,13 +18,15 @@ import (
 )
 
 type createInput struct {
-	markdownFile       string
-	graphFile          string
-	title              string
-	explicitID         string
-	parentID           string
-	issueType          string
-	status             string
+	markdownFile string
+	graphFile    string
+	title        string
+	explicitID   string
+	parentID     string
+	issueType    string
+	status       string
+	// previewStatus is the dry-run status resolved from status.default.
+	previewStatus      string
 	priority           int
 	assignee           string
 	externalRef        string

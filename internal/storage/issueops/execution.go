@@ -43,9 +43,19 @@ func ExecuteCreate(ctx context.Context, tx *sql.Tx, request publicops.CreateRequ
 	if err != nil {
 		return publicops.CreateResult{}, nil, err
 	}
+	// Read inside tx, and only when the caller left the status to the
+	// workspace: a missing key is "" with a nil error, so any error is a real
+	// read failure and must not degrade to open.
+	var defaultStatus string
+	if attempt.Issue.Status == "" {
+		if defaultStatus, err = GetConfigInTx(ctx, tx, "status.default"); err != nil {
+			return publicops.CreateResult{}, nil, err
+		}
+	}
 	attempt, err = PreparePublicCreateRequest(attempt, PublicCreateContext{
 		IssuePrefix: batch.ConfigPrefix, AllowedPrefixes: batch.AllowedPrefixes,
 		CustomStatuses: batch.CustomStatuses, CustomTypes: batch.CustomTypes,
+		DefaultStatus: defaultStatus,
 	})
 	if err != nil {
 		return publicops.CreateResult{}, nil, err

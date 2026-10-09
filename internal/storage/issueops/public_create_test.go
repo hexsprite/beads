@@ -364,3 +364,40 @@ func TestPreparePublicCreateRequestHonorsTheCallerSuppliedIDPrefix(t *testing.T)
 		t.Errorf("ForceIDPrefix did not bypass the caller-supplied prefix: %v", err)
 	}
 }
+
+func TestPreparePublicCreateRequestAppliesDefaultStatusOnlyToAnEmptyStatus(t *testing.T) {
+	custom := []string{"backlog"}
+	cases := []struct {
+		name       string
+		status     types.Status
+		ctx        PublicCreateContext
+		want       types.Status
+		wantErrMsg string
+	}{
+		{name: "empty status takes the configured default", ctx: PublicCreateContext{CustomStatuses: custom, DefaultStatus: "backlog"}, want: "backlog"},
+		{name: "default is trimmed", ctx: PublicCreateContext{DefaultStatus: "  blocked \n"}, want: types.StatusBlocked},
+		{name: "unset default stays open", ctx: PublicCreateContext{}, want: types.StatusOpen},
+		{name: "explicit status wins", status: types.StatusInProgress, ctx: PublicCreateContext{CustomStatuses: custom, DefaultStatus: "backlog"}, want: types.StatusInProgress},
+		{name: "explicit status never consults an invalid default", status: types.StatusDeferred, ctx: PublicCreateContext{DefaultStatus: "nonsense"}, want: types.StatusDeferred},
+		{name: "invalid default is refused when it would apply", ctx: PublicCreateContext{DefaultStatus: "nonsense"}, wantErrMsg: `invalid status.default "nonsense"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared, err := PreparePublicCreateRequest(publicops.CreateRequest{
+				Actor: "actor", Issue: &publicops.Issue{Title: "t", Status: tc.status, Priority: 2, IssueType: types.TypeTask},
+			}, tc.ctx)
+			if tc.wantErrMsg != "" {
+				if !errors.Is(err, storage.ErrValidation) || !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Fatalf("error = %v, want ErrValidation containing %q", err, tc.wantErrMsg)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("PreparePublicCreateRequest() error = %v", err)
+			}
+			if prepared.Issue.Status != tc.want {
+				t.Fatalf("status = %q, want %q", prepared.Issue.Status, tc.want)
+			}
+		})
+	}
+}

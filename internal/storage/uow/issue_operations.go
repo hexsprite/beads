@@ -76,6 +76,7 @@ func (o *issueOperations) Create(ctx context.Context, request publicops.CreateRe
 			AllowedPrefixes: createContext.AllowedPrefixes,
 			CustomStatuses:  types.CustomStatusNames(createContext.CustomStatuses),
 			CustomTypes:     createContext.CustomTypes,
+			DefaultStatus:   createContext.DefaultStatus,
 		})
 		if err != nil {
 			return publicops.CreateResult{}, "", err

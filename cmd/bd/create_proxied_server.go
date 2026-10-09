@@ -60,6 +60,11 @@ func runCreateProxiedSingle(_ *cobra.Command, ctx context.Context, in createInpu
 		if uowProvider == nil {
 			return HandleError("proxied-server UOW provider not initialized")
 		}
+		previewStatus, err := proxiedPreviewStatus(ctx, in)
+		if err != nil {
+			return HandleErrorRespectJSON("%v", err)
+		}
+		in.previewStatus = previewStatus
 		previewLabels := in.labels
 		if in.parentID != "" {
 			dryUW, err := uowProvider.NewUOW(ctx)
@@ -206,8 +211,29 @@ func runCreateLintIssue(in createInput) error {
 	return nil
 }
 
+// proxiedPreviewStatus resolves the status.default a dry-run previews. The real
+// create reads it inside the role's retried transaction; a preview writes
+// nothing, so one read-only unit of work is enough.
+func proxiedPreviewStatus(ctx context.Context, in createInput) (string, error) {
+	if in.status != "" || isDeferredNow(in.deferUntil) {
+		return "", nil
+	}
+	uw, err := uowProvider.NewUOW(ctx)
+	if err != nil {
+		return "", fmt.Errorf("open unit of work: %w", err)
+	}
+	defer uw.Close(ctx)
+	cctx, err := uw.ConfigUseCase().LoadCreateContext(ctx)
+	if err != nil {
+		return "", fmt.Errorf("load create context: %w", err)
+	}
+	return previewDefaultStatus(in.status, in.deferUntil, cctx.DefaultStatus, types.CustomStatusNames(cctx.CustomStatuses))
+}
+
 func buildCreateIssueFromInput(in createInput) *types.Issue {
 	return buildCreateIssue(createIssueParams{
+		ConfigDefault:      true,
+		ResolvedDefault:    in.previewStatus,
 		ID:                 in.explicitID,
 		Title:              in.title,
 		Description:        in.description,

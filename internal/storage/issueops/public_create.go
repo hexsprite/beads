@@ -20,6 +20,10 @@ type PublicCreateContext struct {
 	AllowedPrefixes string
 	CustomStatuses  []string
 	CustomTypes     []string
+	// DefaultStatus is the status.default config value. Only a single-issue
+	// create supplies it; batch creators leave it empty, so an empty
+	// Issue.Status there stays open.
+	DefaultStatus string
 }
 
 // ValidatePublicCreateRequest checks public-create invariants independent of
@@ -60,6 +64,12 @@ func PreparePublicCreateRequest(request publicops.CreateRequest, context PublicC
 	issue := publicCreateIssue(request.Issue)
 	if issue.Status == "" {
 		issue.Status = types.StatusOpen
+		if defaultStatus := strings.TrimSpace(context.DefaultStatus); defaultStatus != "" {
+			if !types.Status(defaultStatus).IsValidWithCustom(context.CustomStatuses) {
+				return publicops.CreateRequest{}, publicCreateValidationError(fmt.Errorf("create: invalid status.default %q (built-in: open, in_progress, blocked, deferred, closed, pinned, hooked; or a status configured via 'bd config set status.custom')", defaultStatus))
+			}
+			issue.Status = types.Status(defaultStatus)
+		}
 	}
 	if issue.ID != "" && !request.ForceIDPrefix {
 		// The caller's prefix wins when it supplied one; see

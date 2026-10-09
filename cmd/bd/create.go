@@ -328,8 +328,25 @@ var createCmd = &cobra.Command{
 			repoPath = routing.DetermineTargetRepo(routingConfig, userRole, ".")
 		}
 
+		// Cross-repo creates (--repo or auto-routing) never consult
+		// status.default: it is the local workspace's setting, not the target's.
+		configDefault := repoPath == "."
+
 		renderDryRun := func() error {
+			resolvedDefault := ""
+			if configDefault {
+				configured, err := store.GetConfig(rootCtx, "status.default")
+				if err != nil {
+					return HandleErrorRespectJSON("failed to read status.default: %v", err)
+				}
+				resolvedDefault, err = previewDefaultStatus(statusFlag, deferUntil, configured, loadEmbeddedCustomStatuses())
+				if err != nil {
+					return HandleErrorRespectJSON("%v", err)
+				}
+			}
 			previewIssue := buildCreateIssue(createIssueParams{
+				ConfigDefault:      configDefault,
+				ResolvedDefault:    resolvedDefault,
 				ID:                 explicitID,
 				Title:              title,
 				Description:        description,
@@ -503,6 +520,7 @@ var createCmd = &cobra.Command{
 		}
 
 		issue := buildCreateIssue(createIssueParams{
+			ConfigDefault:      configDefault,
 			ID:                 explicitID,
 			Title:              title,
 			Description:        description,
@@ -669,9 +687,17 @@ type createIssueParams struct {
 	Target             string
 	Payload            string
 	InitialStatus      string
-	DueAt              *time.Time
-	DeferUntil         *time.Time
-	Metadata           json.RawMessage
+	// ConfigDefault marks a single-issue create whose status is left to the
+	// workspace's status.default when neither InitialStatus nor DeferUntil
+	// decides it. Status stays empty so the create role reads the default in
+	// its own transaction; batch builders leave this false and start open.
+	ConfigDefault bool
+	// ResolvedDefault is the status a ConfigDefault dry-run preview shows,
+	// resolved by previewDefaultStatus. Real creates leave it empty.
+	ResolvedDefault string
+	DueAt           *time.Time
+	DeferUntil      *time.Time
+	Metadata        json.RawMessage
 }
 
 // resolveStorageClass resolves the requested storage class at create time
@@ -769,6 +795,28 @@ func resolveCreateStorageClass(flagValue string, issueType types.IssueType, wisp
 	return class, wisp, nil
 }
 
+func isDeferredNow(deferUntil *time.Time) bool {
+	return deferUntil != nil && deferUntil.After(time.Now())
+}
+
+// previewDefaultStatus resolves the status a ConfigDefault create would get
+// from configured, for dry-run output. It returns "" when an explicit status or
+// a future --defer decides the status first: status.default is not consulted
+// then, so an invalid value must not fail the command.
+func previewDefaultStatus(statusFlag string, deferUntil *time.Time, configured string, customStatuses []string) (string, error) {
+	if statusFlag != "" || isDeferredNow(deferUntil) {
+		return "", nil
+	}
+	configured = strings.TrimSpace(configured)
+	if configured == "" {
+		return string(types.StatusOpen), nil
+	}
+	if !types.Status(configured).IsValidWithCustom(customStatuses) {
+		return "", fmt.Errorf("invalid status.default %q (built-in: open, in_progress, blocked, deferred, closed, pinned, hooked; or a status configured via 'bd config set status.custom')", configured)
+	}
+	return configured, nil
+}
+
 func buildCreateIssue(params createIssueParams) *types.Issue {
 	var externalRefPtr *string
 	if params.ExternalRef != "" {
@@ -776,10 +824,13 @@ func buildCreateIssue(params createIssueParams) *types.Issue {
 	}
 
 	status := types.StatusOpen
-	if params.InitialStatus != "" {
+	switch {
+	case params.InitialStatus != "":
 		status = types.Status(params.InitialStatus)
-	} else if params.DeferUntil != nil && params.DeferUntil.After(time.Now()) {
+	case isDeferredNow(params.DeferUntil):
 		status = types.StatusDeferred
+	case params.ConfigDefault:
+		status = types.Status(params.ResolvedDefault)
 	}
 
 	return &types.Issue{

@@ -963,7 +963,9 @@ func TestGraphApplyNodeCoversCreateIssueParams(t *testing.T) {
 		"InitialStatus": "Status",
 	}
 	excluded := map[string]string{
-		"CreatedBy": "always the ambient actor identity; plans do not impersonate creators",
+		"CreatedBy":       "always the ambient actor identity; plans do not impersonate creators",
+		"ConfigDefault":   "single-issue create only: graph nodes without a status start open and never consult status.default",
+		"ResolvedDefault": "dry-run preview of status.default for a single-issue create; not a plan field",
 	}
 
 	nodeType := reflect.TypeOf(GraphApplyNode{})

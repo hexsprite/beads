@@ -796,3 +796,71 @@ func TestIssueOperationsCreateRetriesOnSerializationSQLStates(t *testing.T) {
 		})
 	}
 }
+
+func createUOWWithDefault(defaultStatus string, commitErr error, onCreate func(domain.CreateIssueParams)) *mockUnitOfWork {
+	return &mockUnitOfWork{
+		commitErr:         commitErr,
+		configUseCase:     createConfigUseCaseStub{context: domain.CreateContext{CustomStatuses: []types.CustomStatus{{Name: "backlog"}, {Name: "triage"}}, DefaultStatus: defaultStatus}},
+		labelUseCase:      hydrationLabelUseCaseStub{},
+		dependencyUseCase: hydrationDependencyUseCaseStub{},
+		commentUseCase:    hydrationCommentUseCaseStub{},
+		issueUseCase: createIssueUseCaseStub{create: func(_ context.Context, params domain.CreateIssueParams, _ string) (domain.CreateIssueResult, error) {
+			onCreate(params)
+			return domain.CreateIssueResult{Issue: &types.Issue{ID: "bd-1", Title: params.Issue.Title}}, nil
+		}},
+	}
+}
+
+// A retried create re-reads status.default with the rest of the create
+// context, so it never carries a default from a rolled-back attempt.
+func TestIssueOperationsCreateRereadsDefaultStatusOnRetry(t *testing.T) {
+	var firstStatus, secondStatus types.Status
+	first := createUOWWithDefault("backlog", newMySQLError(1213), func(p domain.CreateIssueParams) { firstStatus = p.Issue.Status })
+	second := createUOWWithDefault("triage", nil, func(p domain.CreateIssueParams) { secondStatus = p.Issue.Status })
+	operations, err := NewIssueOperations(&mockUnitOfWorkProvider{uows: []*mockUnitOfWork{first, second}})
+	if err != nil {
+		t.Fatalf("NewIssueOperations() error = %v", err)
+	}
+	if _, err := operations.Create(context.Background(), issueops.CreateRequest{Actor: "tester", Issue: &issueops.Issue{Title: "retry", IssueType: types.TypeTask}}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if firstStatus != "backlog" || secondStatus != "triage" {
+		t.Fatalf("attempt statuses = (%q, %q), want (backlog, triage)", firstStatus, secondStatus)
+	}
+}
+
+func TestIssueOperationsCreateDefaultStatusPrecedence(t *testing.T) {
+	cases := []struct {
+		name       string
+		status     types.Status
+		configured string
+		want       types.Status
+		wantErr    bool
+	}{
+		{name: "default applies to an empty status", configured: "backlog", want: "backlog"},
+		{name: "explicit status wins", status: types.StatusBlocked, configured: "backlog", want: types.StatusBlocked},
+		{name: "unset default is open", want: types.StatusOpen},
+		{name: "invalid default is refused", configured: "nonsense", wantErr: true},
+		{name: "explicit status skips an invalid default", status: types.StatusDeferred, configured: "nonsense", want: types.StatusDeferred},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got types.Status
+			uw := createUOWWithDefault(tc.configured, nil, func(p domain.CreateIssueParams) { got = p.Issue.Status })
+			operations, err := NewIssueOperations(&mockUnitOfWorkProvider{uows: []*mockUnitOfWork{uw}})
+			if err != nil {
+				t.Fatalf("NewIssueOperations() error = %v", err)
+			}
+			_, err = operations.Create(context.Background(), issueops.CreateRequest{Actor: "tester", Issue: &issueops.Issue{Title: "t", Status: tc.status, IssueType: types.TypeTask}})
+			if tc.wantErr {
+				if !errors.Is(err, storage.ErrValidation) {
+					t.Fatalf("Create() error = %v, want ErrValidation", err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("Create() status = %q, err = %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
